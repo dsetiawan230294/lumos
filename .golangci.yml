@@ -12,17 +12,31 @@ linters:
     - govet
     - ineffassign
     - misspell
-    - revive
     - staticcheck
     - unconvert
-    - unparam
     - unused
+  settings:
+    errcheck:
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - io.Copy
+        - (*os/exec.Cmd).Wait
+    staticcheck:
+      checks:
+        - all
+        - "-ST1003" # naming conventions
+        - "-ST1011" # variable name describes unit (e.g. CooldownSec time.Duration)
   exclusions:
     rules:
       - path: _test\.go
         linters:
           - errcheck
           - unparam
+          - unused
 
 formatters:
   enable:

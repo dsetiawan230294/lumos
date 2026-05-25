@@ -285,42 +285,7 @@ func summarizeAll(xs []metricsSampleRef) map[string]Summary {
 	}
 }
 
-// sparklinesFor returns one sparkline string per metric for a single run.
-func sparklinesFor(r RunReport) map[string]string {
-	out := map[string]string{}
-	get := func(f func(i int) float64) []float64 {
-		v := make([]float64, len(r.Run.Samples))
-		for i := range r.Run.Samples {
-			v[i] = f(i)
-		}
-		return v
-	}
-	out["fps"] = spark(get(func(i int) float64 { return r.Run.Samples[i].FPS }))
-	out["cpu_pct"] = spark(get(func(i int) float64 { return r.Run.Samples[i].CPUPct }))
-	out["ram_mb"] = spark(get(func(i int) float64 { return r.Run.Samples[i].RAMMB }))
-	out["jank_pct"] = spark(get(func(i int) float64 { return r.Run.Samples[i].JankPct }))
-	return out
-}
-
-// seriesFor returns the raw per-sample series for each major metric, used
-// to draw inline SVG line charts in the HTML report.
-func seriesFor(r RunReport) map[string][]float64 {
-	n := len(r.Run.Samples)
-	pull := func(f func(i int) float64) []float64 {
-		v := make([]float64, n)
-		for i := 0; i < n; i++ {
-			v[i] = f(i)
-		}
-		return v
-	}
-	return map[string][]float64{
-		"fps":      pull(func(i int) float64 { return r.Run.Samples[i].FPS }),
-		"cpu_pct":  pull(func(i int) float64 { return r.Run.Samples[i].CPUPct }),
-		"ram_mb":   pull(func(i int) float64 { return r.Run.Samples[i].RAMMB }),
-		"jank_pct": pull(func(i int) float64 { return r.Run.Samples[i].JankPct }),
-	}
-}
-
+// sparkRamp is the unicode block ramp used by spark.
 var sparkRamp = []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
 
 func spark(xs []float64) string {
@@ -491,7 +456,7 @@ func svgLineSeries(xs []float64, color string) string {
 	}
 	fmt.Fprintf(&area, "L%.1f,%.1f Z", xAt(len(xs)-1), marginT+plotH)
 
-	gid := fmt.Sprintf("g%x", uintptr(unsafePointerOf(xs))&0xFFFF)
+	gid := fmt.Sprintf("g%x", unsafePointerOf(xs)&0xFFFF)
 	var b strings.Builder
 	// preserveAspectRatio defaults to xMidYMid meet so axis labels never stretch.
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 %g %g">`, W, H)
