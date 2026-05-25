@@ -189,27 +189,30 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
-			// Run hooks once, sequentially, on the first device in the plan.
-			// Hooks are setup-only — no sampling, no JSON output, errors are
-			// fatal (a failing setup almost always invalidates the run).
+			// Run hooks once per device, sequentially, before any benchmark
+			// scenarios. Hooks are setup-only — no sampling, no JSON output.
+			// They run on every device so each device starts in the same
+			// prepared state (logged in, permissions granted, seed data, etc).
+			// Failure on any device aborts the run.
 			if len(hooks) > 0 {
-				host := plan[0]
-				fmt.Fprintf(out, "lumos run: %d hook(s) on %s\n", len(hooks), host.id)
-				for _, h := range hooks {
-					fmt.Fprintf(out, "  [hook] %s → %s\n", h.Name, h.Script)
-					res := automation.Run(ctx, automation.ScenarioOpts{
-						PythonBin:  pythonBin,
-						HarnessPy:  harness,
-						ScriptPath: h.Script,
-						DeviceID:   host.id,
-						Platform:   string(host.platform),
-						AppID:      host.appID,
-						Iteration:  1,
-						Env:        mergeHookEnv(pyDir),
-						Stderr:     os.Stderr,
-					})
-					if res.Err != nil {
-						return fmt.Errorf("hook %q failed: %w", h.Name, res.Err)
+				fmt.Fprintf(out, "lumos run: %d hook(s) on %d device(s)\n", len(hooks), len(plan))
+				for _, host := range plan {
+					for _, h := range hooks {
+						fmt.Fprintf(out, "  [hook] %s on %s → %s\n", h.Name, host.id, h.Script)
+						res := automation.Run(ctx, automation.ScenarioOpts{
+							PythonBin:  pythonBin,
+							HarnessPy:  harness,
+							ScriptPath: h.Script,
+							DeviceID:   host.id,
+							Platform:   string(host.platform),
+							AppID:      host.appID,
+							Iteration:  1,
+							Env:        mergeHookEnv(pyDir),
+							Stderr:     os.Stderr,
+						})
+						if res.Err != nil {
+							return fmt.Errorf("hook %q on %s failed: %w", h.Name, host.id, res.Err)
+						}
 					}
 				}
 			}

@@ -120,9 +120,9 @@ ios       00008120-0011…    iPhone 15      18.4
 app:
   android: com.android.settings
 scenarios:
-  # Optional setup hook: runs once on the first device at the start of the
-  # whole `lumos run`. NOT sampled, NOT timed, no JSON output. Use for
-  # login, granting permissions, seeding data, dismissing first-run dialogs.
+  # Optional setup hook: runs once per device at the start of the whole
+  # `lumos run`. NOT sampled, NOT timed, no JSON output. Use for login,
+  # granting permissions, seeding data, dismissing first-run dialogs.
   - name: login
     script: ./scenarios/login.py
     hook: true
@@ -146,11 +146,13 @@ parallel:
 
 **Hooks** (`hook: true`):
 
-- Run **exactly once** at the start of the run, on the first device in the
-  plan, before any benchmark scenarios.
+- Run **once per device** at the start of the run, before any benchmark
+  scenarios — so every device starts in the same prepared state.
+- Sequential across hooks and across devices (no parallelism — order is
+  predictable, easier to debug).
 - Not sampled, not timed, no JSON output — pure setup.
-- Failure aborts the run (a broken setup almost always invalidates the
-  benchmark numbers).
+- Failure on any device aborts the run (a broken setup almost always
+  invalidates the benchmark numbers).
 - `iterations` / `warmup` / `timebox` / `cooldown_sec` are ignored on a hook.
 
 **Timebox** (`timebox: <duration>`, e.g. `4m`, `90s`, `1h`):
