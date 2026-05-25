@@ -14,18 +14,56 @@ Lumos measures real-device performance — FPS, frame time, CPU, RAM, jank, star
 - **Single static binary** for **macOS** (Android + iOS) and **Linux / Windows** (Android only).
 - **CI-friendly**: machine-readable JSON, HTML report, regression compare with exit codes 0/1/2 = pass/regression/error.
 
-See [PLAN.md](PLAN.md) for design and [TRACKER.md](TRACKER.md) for progress.
-
 ## Install
 
+### Option 1 — Prebuilt binary (recommended)
+
+Download the static binary for your OS/arch from the [Releases page](https://github.com/dsetiawan230294/lumos/releases/latest):
+
+| OS      | Arch          | Asset                                  |
+| ------- | ------------- | -------------------------------------- |
+| macOS   | Apple Silicon | `lumos_<version>_darwin_arm64`         |
+| macOS   | Intel         | `lumos_<version>_darwin_amd64`         |
+| Linux   | x86_64        | `lumos_<version>_linux_amd64`          |
+| Linux   | arm64         | `lumos_<version>_linux_arm64`          |
+| Windows | x86_64        | `lumos_<version>_windows_amd64.exe`    |
+
 ```bash
-# Build from source (requires Go 1.22+)
+# macOS / Linux example
+curl -fsSL -o lumos \
+  https://github.com/dsetiawan230294/lumos/releases/latest/download/lumos_0.1.0_$(uname -s | tr A-Z a-z)_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+chmod +x lumos && sudo mv lumos /usr/local/bin/
+lumos --version
+```
+
+Checksums are published alongside the binaries as `SHA256SUMS.txt`.
+
+### Option 2 — `go install`
+
+Requires Go 1.25+:
+
+```bash
+go install github.com/dsetiawan230294/lumos/cmd/lumos@latest
+# or pin a release:
+go install github.com/dsetiawan230294/lumos/cmd/lumos@v0.1.0
+```
+
+### Option 3 — Build from source
+
+```bash
 git clone https://github.com/dsetiawan230294/lumos
 cd lumos && make build      # → ./bin/lumos
-
-# Optional: Python helper for writing scenarios
-pip install lumos-py        # Lumos also vendors a copy for zero-setup runs
 ```
+
+### Python helper (optional, for scripted scenarios)
+
+```bash
+pip install lumos-performance-test
+# with Appium adapter:
+pip install "lumos-performance-test[appium]"
+```
+
+> `lumos run` also vendors the helper for zero-setup runs — `pip` is only needed if you want to author scenarios in your own Python project.
 
 Prerequisites:
 
