@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"text/tabwriter"
 	"time"
@@ -189,31 +190,53 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
-			// Run hooks once per device, sequentially, before any benchmark
-			// scenarios. Hooks are setup-only — no sampling, no JSON output.
-			// They run on every device so each device starts in the same
-			// prepared state (logged in, permissions granted, seed data, etc).
+			// Run hooks before any benchmark scenarios. Each device runs its
+			// hook(s) in parallel with the other devices (one Appium / adb
+			// pipe per device) so the slowest device sets the floor, not the
+			// sum. Hooks for the same device run sequentially in declaration
+			// order. Hooks are setup-only — no sampling, no JSON output.
 			// Failure on any device aborts the run.
 			if len(hooks) > 0 {
-				fmt.Fprintf(out, "lumos run: %d hook(s) on %d device(s)\n", len(hooks), len(plan))
+				fmt.Fprintf(out, "lumos run: %d hook(s) on %d device(s) (parallel)\n", len(hooks), len(plan))
+				var (
+					wg       sync.WaitGroup
+					hookMu   sync.Mutex // serialises stdout prints
+					firstErr atomic.Pointer[error]
+				)
 				for _, host := range plan {
-					for _, h := range hooks {
-						fmt.Fprintf(out, "  [hook] %s on %s → %s\n", h.Name, host.id, h.Script)
-						res := automation.Run(ctx, automation.ScenarioOpts{
-							PythonBin:  pythonBin,
-							HarnessPy:  harness,
-							ScriptPath: h.Script,
-							DeviceID:   host.id,
-							Platform:   string(host.platform),
-							AppID:      host.appID,
-							Iteration:  1,
-							Env:        mergeHookEnv(pyDir),
-							Stderr:     os.Stderr,
-						})
-						if res.Err != nil {
-							return fmt.Errorf("hook %q on %s failed: %w", h.Name, host.id, res.Err)
+					host := host
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						for _, h := range hooks {
+							if firstErr.Load() != nil {
+								return // peer device failed; abandon ours
+							}
+							hookMu.Lock()
+							fmt.Fprintf(out, "  [hook] %s on %s → %s\n", h.Name, host.id, h.Script)
+							hookMu.Unlock()
+							res := automation.Run(ctx, automation.ScenarioOpts{
+								PythonBin:  pythonBin,
+								HarnessPy:  harness,
+								ScriptPath: h.Script,
+								DeviceID:   host.id,
+								Platform:   string(host.platform),
+								AppID:      host.appID,
+								Iteration:  1,
+								Env:        mergeHookEnv(pyDir),
+								Stderr:     os.Stderr,
+							})
+							if res.Err != nil {
+								err := fmt.Errorf("hook %q on %s failed: %w", h.Name, host.id, res.Err)
+								firstErr.CompareAndSwap(nil, &err)
+								return
+							}
 						}
-					}
+					}()
+				}
+				wg.Wait()
+				if errp := firstErr.Load(); errp != nil {
+					return *errp
 				}
 			}
 

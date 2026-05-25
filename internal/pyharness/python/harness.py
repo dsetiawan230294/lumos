@@ -32,6 +32,14 @@ def _emit(method: str, **params: object) -> None:
 
 
 def _load(path: str) -> ModuleType:
+    # Mirror the behavior of `python script.py`: make the script's directory
+    # the first entry on sys.path so the script can import sibling modules
+    # (helpers, page-object files, project-local config, etc.) without any
+    # extra setup. Idempotent — repeated invocations don't duplicate entries.
+    script_dir = os.path.abspath(os.path.dirname(path))
+    if script_dir and script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+
     spec = importlib.util.spec_from_file_location("lumos_scenario", path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load scenario module: {path}")

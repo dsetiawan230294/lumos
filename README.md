@@ -148,8 +148,10 @@ parallel:
 
 - Run **once per device** at the start of the run, before any benchmark
   scenarios — so every device starts in the same prepared state.
-- Sequential across hooks and across devices (no parallelism — order is
-  predictable, easier to debug).
+- **Parallel across devices** (each device runs its hooks on its own
+  goroutine, so the slowest device sets the floor, not the sum).
+  Multiple hooks for the same device still run sequentially in declaration
+  order.
 - Not sampled, not timed, no JSON output — pure setup.
 - Failure on any device aborts the run (a broken setup almost always
   invalidates the benchmark numbers).
