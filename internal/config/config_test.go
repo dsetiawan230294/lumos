@@ -34,3 +34,29 @@ func TestValidateRequiresScenario(t *testing.T) {
 		t.Fatal("expected error when no scenarios provided")
 	}
 }
+
+func TestValidateHookSkipsIterationCheck(t *testing.T) {
+	// A hook scenario does not need iterations/warmup; validation must pass.
+	c := &Config{
+		App: App{Android: "com.example"},
+		Scenarios: []Scenario{
+			{Name: "login", Script: "login.py", Hook: true},
+			{Name: "scroll", Script: "scroll.py", Iterations: 3},
+		},
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+}
+
+func TestValidateNegativeTimebox(t *testing.T) {
+	c := &Config{
+		App: App{Android: "com.example"},
+		Scenarios: []Scenario{
+			{Name: "x", Script: "s.py", Iterations: 1, Timebox: -1},
+		},
+	}
+	if err := c.Validate(); err == nil {
+		t.Fatal("expected error for negative timebox")
+	}
+}

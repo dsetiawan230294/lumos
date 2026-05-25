@@ -10,6 +10,7 @@ Lumos measures real-device performance — FPS, frame time, CPU, RAM, jank, star
 
 - **Parallel multi-device execution** with a **work-stealing scheduler** (one slow device never blocks the others).
 - **Two dispatch modes**: `distribute` (1 scenario → 1 device, scales throughput) or `replicate` (every scenario on every device, for cross-device comparison).
+- **Setup hooks** (`hook: true`) and **timebox** (`timebox: 4m`) for one-shot setup scripts and minimum-duration measured phases.
 - **Automatic duplicate-transport dedup** — phones reachable via USB + Wi-Fi + mDNS pairing show up once (best transport wins).
 - **Python automation** bridge for scripted scenarios (Appium, uiautomator2, XCUITest, plain `adb`, anything).
 - **Manual / interactive mode** (`lumos watch`) — drive the app by hand, capture metrics live with hotkeys.
@@ -119,11 +120,20 @@ ios       00008120-0011…    iPhone 15      18.4
 app:
   android: com.android.settings
 scenarios:
+  # Optional setup hook: runs once on the first device at the start of the
+  # whole `lumos run`. NOT sampled, NOT timed, no JSON output. Use for
+  # login, granting permissions, seeding data, dismissing first-run dialogs.
+  - name: login
+    script: ./scenarios/login.py
+    hook: true
+
   - name: settings_scroll
     script: ./scenarios/settings_scroll.py
-    iterations: 3
+    iterations: 3        # minimum number of measured iterations
     warmup: 1
     cooldown_sec: 1s
+    timebox: 4m          # optional: keep iterating past `iterations`
+                         # until total measured time >= 4 minutes
   - name: settings_open_close
     script: ./scenarios/settings_open_close.py
     iterations: 3
@@ -133,6 +143,26 @@ parallel:
   max_devices: 0       # 0 = all attached
   work_stealing: true
 ```
+
+**Hooks** (`hook: true`):
+
+- Run **exactly once** at the start of the run, on the first device in the
+  plan, before any benchmark scenarios.
+- Not sampled, not timed, no JSON output — pure setup.
+- Failure aborts the run (a broken setup almost always invalidates the
+  benchmark numbers).
+- `iterations` / `warmup` / `timebox` / `cooldown_sec` are ignored on a hook.
+
+**Timebox** (`timebox: <duration>`, e.g. `4m`, `90s`, `1h`):
+
+- Sets a **minimum** measured wall-clock duration for the scenario.
+- After `iterations` measured passes complete, lumos keeps iterating until
+  the elapsed measured time ≥ timebox. Total iterations may exceed
+  `iterations`, never go below.
+- `timebox: 0` (default) means "stop at exactly `iterations`" — the historical
+  behavior.
+- Useful when individual iterations are short and you want "at least N
+  minutes of samples" regardless of per-iteration speed.
 
 **Dispatch modes** (`parallel.mode`):
 

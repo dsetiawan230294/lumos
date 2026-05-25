@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/dsetiawan230294/lumos/internal/automation"
 	"github.com/dsetiawan230294/lumos/internal/budget"
 	"github.com/dsetiawan230294/lumos/internal/config"
 	"github.com/dsetiawan230294/lumos/internal/device/android"
@@ -177,7 +178,43 @@ func newRunCmd() *cobra.Command {
 				mode = "distribute"
 			}
 
-			// Compute (scenario, device) assignments up front.
+			// Split scenarios into hooks (run-once setup) and benchmarks.
+			var hooks []config.Scenario
+			var benchmarks []config.Scenario
+			for _, sc := range cfg.Scenarios {
+				if sc.Hook {
+					hooks = append(hooks, sc)
+				} else {
+					benchmarks = append(benchmarks, sc)
+				}
+			}
+
+			// Run hooks once, sequentially, on the first device in the plan.
+			// Hooks are setup-only — no sampling, no JSON output, errors are
+			// fatal (a failing setup almost always invalidates the run).
+			if len(hooks) > 0 {
+				host := plan[0]
+				fmt.Fprintf(out, "lumos run: %d hook(s) on %s\n", len(hooks), host.id)
+				for _, h := range hooks {
+					fmt.Fprintf(out, "  [hook] %s → %s\n", h.Name, h.Script)
+					res := automation.Run(ctx, automation.ScenarioOpts{
+						PythonBin:  pythonBin,
+						HarnessPy:  harness,
+						ScriptPath: h.Script,
+						DeviceID:   host.id,
+						Platform:   string(host.platform),
+						AppID:      host.appID,
+						Iteration:  1,
+						Env:        mergeHookEnv(pyDir),
+						Stderr:     os.Stderr,
+					})
+					if res.Err != nil {
+						return fmt.Errorf("hook %q failed: %w", h.Name, res.Err)
+					}
+				}
+			}
+
+			// Compute (scenario, device) assignments up front, hooks excluded.
 			type assignment struct {
 				sc       config.Scenario
 				p        targetDevice
@@ -189,7 +226,7 @@ func newRunCmd() *cobra.Command {
 			case "replicate":
 				// Original behavior: every scenario runs on every device.
 				for _, p := range plan {
-					for _, sc := range cfg.Scenarios {
+					for _, sc := range benchmarks {
 						jobs = append(jobs, assignment{sc, p, p.platform, p.appID})
 					}
 				}
@@ -197,14 +234,14 @@ func newRunCmd() *cobra.Command {
 				// Round-robin scenarios across devices: scenario[i] runs on
 				// device[i % len(plan)]. Each scenario runs on exactly one
 				// device so total wall time scales with the device count.
-				for i, sc := range cfg.Scenarios {
+				for i, sc := range benchmarks {
 					p := plan[i%len(plan)]
 					jobs = append(jobs, assignment{sc, p, p.platform, p.appID})
 				}
 			}
 
 			fmt.Fprintf(out, "lumos run: %d scenario(s) on %d device(s) (mode=%s, %d job(s)) → %s\n",
-				len(cfg.Scenarios), len(plan), mode, len(jobs), outDir)
+				len(benchmarks), len(plan), mode, len(jobs), outDir)
 
 			// Build one sampler factory per device, reused across scenarios
 			// that land on the same device.
@@ -356,6 +393,16 @@ func buildPlan(cfg *config.Config, androidDevs []android.DeviceInfo, iosDevs []i
 		plan = append(plan, targetDevice{id: "no-device", platform: metrics.Android, appID: appID})
 	}
 	return plan
+}
+
+// mergeHookEnv builds the env map passed to hook scripts so the vendored
+// lumos Python helper resolves the same way it does for benchmark scenarios.
+func mergeHookEnv(pyPath string) map[string]string {
+	env := map[string]string{}
+	if pyPath != "" {
+		env["PYTHONPATH"] = pyPath
+	}
+	return env
 }
 
 func makeSamplerFactory(ctx context.Context, adb *android.ADB, t targetDevice, appID string, _ time.Duration, threads, debug bool) func() runner.Sampler {

@@ -73,7 +73,12 @@ func RunScenarioWithStderr(ctx context.Context, in PlanInput, stderr io.Writer) 
 	total := in.Scenario.Warmup + in.Scenario.Iterations
 	results := make([]IterationResult, 0, total)
 
-	for i := 0; i < total; i++ {
+	// Measured-phase start time, used to honor Scenario.Timebox: after the
+	// configured Iterations finish, we keep iterating until elapsed >=
+	// Timebox. Set when we transition out of warmup.
+	var measuredStart time.Time
+
+	for i := 0; ; i++ {
 		if err := ctx.Err(); err != nil {
 			return results, err
 		}
@@ -81,6 +86,18 @@ func RunScenarioWithStderr(ctx context.Context, in PlanInput, stderr io.Writer) 
 		iteration := i + 1
 		if !warmup {
 			iteration = i - in.Scenario.Warmup + 1
+			if measuredStart.IsZero() {
+				measuredStart = time.Now()
+			}
+		}
+
+		// Stop condition: ran at least Iterations measured passes AND
+		// (no timebox OR timebox elapsed). When Timebox==0 this collapses
+		// to the historical "stop after Iterations" behavior.
+		if !warmup && iteration > in.Scenario.Iterations {
+			if in.Scenario.Timebox <= 0 || time.Since(measuredStart) >= in.Scenario.Timebox {
+				break
+			}
 		}
 
 		job := Job{
@@ -117,7 +134,10 @@ func RunScenarioWithStderr(ctx context.Context, in PlanInput, stderr io.Writer) 
 		// continue, mirroring CI-friendly behaviour. Caller decides whether
 		// to bail based on err count in results.
 
-		if i < total-1 && cooldown > 0 {
+		// Cooldown between iterations. We sleep after every iteration; the
+		// loop's stop-condition above will short-circuit the next pass when
+		// done so this doesn't add a trailing sleep at the end.
+		if cooldown > 0 {
 			select {
 			case <-time.After(cooldown):
 			case <-ctx.Done():

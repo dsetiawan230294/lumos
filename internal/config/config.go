@@ -26,12 +26,26 @@ type App struct {
 }
 
 // Scenario describes one benchmark scenario driven by a Python script.
+//
+// A scenario marked Hook=true is a setup/teardown script that runs exactly
+// once at the start of the whole `lumos run`, on the first device in the
+// plan. Hooks are NOT sampled, NOT timed, and produce NO JSON output — they
+// exist to prepare device/app state (login, seed data, grant permissions,
+// dismiss dialogs, etc.) before benchmark scenarios start.
+//
+// Timebox sets a minimum wall-clock duration for the measured phase. When
+// non-zero, lumos keeps running additional iterations after `iterations`
+// have completed until the elapsed measured time ≥ Timebox. Useful for
+// flake-prone metrics where you want "at least N minutes of samples"
+// regardless of how fast each iteration runs.
 type Scenario struct {
 	Name        string        `yaml:"name"`
 	Script      string        `yaml:"script"`
 	Iterations  int           `yaml:"iterations"`
 	Warmup      int           `yaml:"warmup"`
 	CooldownSec time.Duration `yaml:"cooldown_sec"`
+	Hook        bool          `yaml:"hook"`
+	Timebox     time.Duration `yaml:"timebox"`
 }
 
 // Devices filters which attached devices participate.
@@ -104,11 +118,18 @@ func (c *Config) Validate() error {
 		if s.Script == "" {
 			return fmt.Errorf("scenarios[%d].script is required", i)
 		}
+		if s.Hook {
+			// Hooks are setup-only; iteration/warmup/timebox are ignored.
+			continue
+		}
 		if s.Iterations < 1 {
 			return fmt.Errorf("scenarios[%d].iterations must be >= 1", i)
 		}
 		if s.Warmup < 0 {
 			return fmt.Errorf("scenarios[%d].warmup must be >= 0", i)
+		}
+		if s.Timebox < 0 {
+			return fmt.Errorf("scenarios[%d].timebox must be >= 0", i)
 		}
 	}
 	return nil
