@@ -1,0 +1,11 @@
+app:
+  android: com.example.app
+scenarios:
+  - name: home_scroll
+    script: ./scenarios/examples/home_scroll.py
+    iterations: 2
+    warmup: 1
+    cooldown_sec: 0s
+parallel:
+  max_devices: 0
+  work_stealing: true

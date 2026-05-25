@@ -1,0 +1,20 @@
+app:
+  android: com.example.app
+  ios: com.example.app
+scenarios:
+  - name: home_scroll
+    script: ./scenarios/home_scroll.py
+    iterations: 10
+    warmup: 2
+    cooldown_sec: 3s
+devices:
+  filter:
+    os: [android, ios]
+    min_api: 26
+    min_ios: "15"
+parallel:
+  max_devices: 0
+  work_stealing: true
+thresholds:
+  fps_p10_min: 55
+  cpu_avg_max: 35

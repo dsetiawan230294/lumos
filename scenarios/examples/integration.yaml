@@ -1,0 +1,11 @@
+app:
+  android: com.android.settings
+scenarios:
+  - name: settings_scroll
+    script: ./scenarios/examples/settings_scroll.py
+    iterations: 3
+    warmup: 1
+    cooldown_sec: 1s
+parallel:
+  max_devices: 0
+  work_stealing: true

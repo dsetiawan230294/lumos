@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumos-py"
+version = "0.0.1"
+description = "Python helper for authoring Lumos mobile benchmark scenarios"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Lumos contributors" }]
+keywords = ["mobile", "benchmark", "performance", "android", "ios"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/lumos-bench/lumos"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lumos*"]

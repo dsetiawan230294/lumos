@@ -1,0 +1,37 @@
+# Binaries
+/bin/
+/dist/
+
+# Go
+*.test
+*.out
+coverage.out
+coverage.html
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Lumos run artifacts
+/results/
+*.trace
+*.perfetto-trace
+*.log
+
+# Internal docs / scratch (not for public repo)
+PLAN.md
+TRACKER.md
+/example_report/
+/sim-*/
