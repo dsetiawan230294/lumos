@@ -47,6 +47,13 @@ func (d DeviceInfo) Display() string {
 //
 // Devices in non-ready states (offline/unauthorized) are returned but their
 // APILevel/Model may be zero.
+//
+// Multiple adb transports can point at the same physical phone (e.g. a USB
+// serial, an IP:port wireless transport, and an mDNS pairing channel all
+// active simultaneously). Devices() deduplicates by hardware serial
+// (`getprop ro.serialno`) and keeps the most benchmark-friendly transport:
+// USB serial > IP:port > mDNS. Without this two samplers would race to
+// force-stop and relaunch the app on the same device.
 func (a *ADB) Devices(ctx context.Context) ([]DeviceInfo, error) {
 	out, err := a.run(ctx, "devices", "-l")
 	if err != nil {
@@ -71,8 +78,57 @@ func (a *ADB) Devices(ctx context.Context) ([]DeviceInfo, error) {
 				infos[i].Model = strings.TrimSpace(v)
 			}
 		}
+		// Probe hardware serial for dedup. Stored in Extra so callers that
+		// look at it (e.g. logs) can see why two transports collapsed.
+		if v, err := a.Shell(ctx, infos[i].Serial, "getprop", "ro.serialno"); err == nil {
+			if hw := strings.TrimSpace(v); hw != "" {
+				infos[i].Extra["hw_serial"] = hw
+			}
+		}
 	}
-	return infos, nil
+	return dedupByHardwareSerial(infos), nil
+}
+
+// transportKind ranks adb serials by how useful they are for sampling.
+// Lower number = preferred. USB-style serials (alphanumeric, no separators)
+// are stable and have the lowest RTT. IP:port is fine but adds network
+// latency. mDNS (`adb-<serial>-<token>._adb-tls-connect._tcp.`) shares the
+// same transport as the IP form on modern Android but the long name is
+// awkward in logs and reports, so we deprioritize it.
+func transportKind(serial string) int {
+	switch {
+	case strings.Contains(serial, "_adb-tls-"), strings.Contains(serial, "._tcp"):
+		return 2 // mDNS pairing channel
+	case strings.Contains(serial, ":"):
+		return 1 // IP:port wireless transport
+	default:
+		return 0 // USB serial
+	}
+}
+
+// dedupByHardwareSerial collapses entries that share the same ro.serialno,
+// keeping the highest-priority transport (see transportKind). Devices
+// without a probed hw_serial (offline/unauthorized) are passed through
+// unchanged so the caller can still report them.
+func dedupByHardwareSerial(in []DeviceInfo) []DeviceInfo {
+	best := map[string]int{} // hw_serial -> index in out
+	var out []DeviceInfo
+	for _, d := range in {
+		hw := d.Extra["hw_serial"]
+		if hw == "" {
+			out = append(out, d)
+			continue
+		}
+		if idx, ok := best[hw]; ok {
+			if transportKind(d.Serial) < transportKind(out[idx].Serial) {
+				out[idx] = d
+			}
+			continue
+		}
+		best[hw] = len(out)
+		out = append(out, d)
+	}
+	return out
 }
 
 // parseDevicesL parses the output of `adb devices -l`. Format:

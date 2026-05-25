@@ -660,6 +660,48 @@ func WriteHTMLReport(resultsDir, outPath, tool, version string) (string, error) 
 	return outPath, nil
 }
 
+// WritePerScenarioReports writes one HTML report per scenario into
+// resultsDir, named report_<scenario>.html. Useful when you want to share
+// or diff a single scenario without the combined aggregate. Returns the
+// list of written file paths in alphabetical scenario order.
+func WritePerScenarioReports(resultsDir, tool, version string) ([]string, error) {
+	reports, _, err := LoadRunReports(resultsDir)
+	if err != nil {
+		return nil, err
+	}
+	if len(reports) == 0 {
+		return nil, fmt.Errorf("no run reports found in %s", resultsDir)
+	}
+	byScenario := map[string][]RunReport{}
+	for _, r := range reports {
+		byScenario[r.Run.Scenario] = append(byScenario[r.Run.Scenario], r)
+	}
+	names := make([]string, 0, len(byScenario))
+	for n := range byScenario {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	genAt := nowFn().Format("2006-01-02 15:04:05")
+	written := make([]string, 0, len(names))
+	for _, n := range names {
+		doc := BuildAggregate(byScenario[n])
+		doc.Tool = tool
+		doc.Version = version
+		doc.GeneratedAt = genAt
+		var buf bytes.Buffer
+		if err := RenderHTML(&buf, doc); err != nil {
+			return nil, fmt.Errorf("render %s: %w", n, err)
+		}
+		outPath := filepath.Join(resultsDir, "report_"+safeName(n)+".html")
+		if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+			return nil, fmt.Errorf("write %s: %w", outPath, err)
+		}
+		written = append(written, outPath)
+	}
+	return written, nil
+}
+
 // threadPalette is a stable, colour-blind-tolerant cycle for stacked thread
 // areas. Ordering is fixed so the same thread name lands on the same colour
 // across reports (combined with sort-by-mean determinism upstream).

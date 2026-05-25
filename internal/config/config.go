@@ -47,9 +47,18 @@ type DeviceFilter struct {
 }
 
 // Parallel controls multi-device execution.
+//
+// Mode controls how scenarios are mapped to devices:
+//
+//   - "distribute" (default): each scenario runs on exactly one device.
+//     Scenarios are round-robin assigned across the device pool. Total wall
+//     time scales with the number of devices — best for throughput.
+//   - "replicate": every scenario runs on every device. Best for
+//     cross-device comparison reports.
 type Parallel struct {
-	MaxDevices   int  `yaml:"max_devices"`
-	WorkStealing bool `yaml:"work_stealing"`
+	MaxDevices   int    `yaml:"max_devices"`
+	WorkStealing bool   `yaml:"work_stealing"`
+	Mode         string `yaml:"mode"` // "distribute" (default) | "replicate"
 }
 
 // Thresholds are pass/fail gates for the benchmark.
@@ -82,6 +91,11 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Scenarios) == 0 {
 		return errors.New("at least one scenario is required")
+	}
+	switch c.Parallel.Mode {
+	case "", "distribute", "replicate":
+	default:
+		return fmt.Errorf("parallel.mode must be 'distribute' or 'replicate', got %q", c.Parallel.Mode)
 	}
 	for i, s := range c.Scenarios {
 		if s.Name == "" {

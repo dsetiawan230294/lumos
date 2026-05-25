@@ -3,8 +3,10 @@ package android
 import (
 	"context"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/dsetiawan230294/lumos/internal/metrics"
@@ -22,6 +24,10 @@ type SamplerConfig struct {
 	// Sample.Threads is populated from /proc/<pid>/task/*/stat. Adds one
 	// extra adb roundtrip per tick.
 	Threads bool
+	// Debug, when non-nil, receives one-line diagnostic messages whenever
+	// a collector call fails. Errors are rate-limited per collector so the
+	// log stays readable on flaky devices.
+	Debug io.Writer
 }
 
 // NCPU returns the number of online CPU cores on the device. Returns 1 on
@@ -81,8 +87,58 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 	}
 
 	out := make(chan metrics.Sample, 8)
+
+	// Per-collector error counters so we can summarize at sampler exit and
+	// rate-limit per-tick stderr noise.
+	type errStats struct {
+		count atomic.Uint64
+		last  atomic.Pointer[string]
+	}
+	stats := map[string]*errStats{
+		"procstat": {}, "meminfo": {}, "gfxinfo": {}, "battery": {}, "threads": {},
+	}
+	logErr := func(kind string, err error) {
+		if err == nil {
+			return
+		}
+		s := stats[kind]
+		n := s.count.Add(1)
+		msg := err.Error()
+		s.last.Store(&msg)
+		// Log first 3 occurrences per collector, then every 30th, so a
+		// permanently-broken collector still produces output without
+		// spamming megabytes of repeats.
+		if cfg.Debug != nil && (n <= 3 || n%30 == 0) {
+			fmt.Fprintf(cfg.Debug, "sampler[%s/%s] %s err#%d: %s\n",
+				cfg.Serial, kind, kind, n, msg)
+		}
+	}
+	// On exit, print a per-collector summary so even runs without --debug
+	// can be diagnosed after the fact (the caller decides where to route
+	// cfg.Debug — typically the same stream as scenario stderr).
+	defer func() {
+		if cfg.Debug == nil {
+			return
+		}
+		summary := []string{}
+		for kind, s := range stats {
+			if n := s.count.Load(); n > 0 {
+				last := ""
+				if p := s.last.Load(); p != nil {
+					last = *p
+				}
+				summary = append(summary, fmt.Sprintf("%s=%d (last: %s)", kind, n, last))
+			}
+		}
+		if len(summary) > 0 {
+			fmt.Fprintf(cfg.Debug, "sampler[%s] exit, collector errors: %s\n",
+				cfg.Serial, strings.Join(summary, ", "))
+		}
+	}()
+
 	// Prime the CPU baseline so the first emitted sample is meaningful.
-	prevProc, prevTotal, _ := a.ReadProcStat(ctx, cfg.Serial, cfg.Pid)
+	prevProc, prevTotal, primeErr := a.ReadProcStat(ctx, cfg.Serial, cfg.Pid)
+	logErr("procstat", primeErr)
 	// Prime gfxinfo so the first window starts clean.
 	_ = a.GfxReset(ctx, cfg.Serial, cfg.AppID)
 	// Prime per-thread baseline if enabled.
@@ -94,8 +150,14 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 				prevThreads[t.TID] = t.Jiffies
 			}
 			prevThreadTotal = tj
+		} else {
+			logErr("threads", err)
 		}
 	}
+
+	// pid is mutable: if /proc/<pid>/stat starts failing (process restarted
+	// by the scenario, or app cold-relaunched), we re-resolve via pidof.
+	pid := cfg.Pid
 
 	go func() {
 		defer close(out)
@@ -108,7 +170,20 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 			case t := <-ticker.C:
 				s := metrics.Sample{T: t}
 
-				if pj, tj, err := a.ReadProcStat(ctx, cfg.Serial, cfg.Pid); err == nil {
+				pj, tj, err := a.ReadProcStat(ctx, cfg.Serial, pid)
+				if err != nil {
+					logErr("procstat", err)
+					// PID likely changed — re-resolve and reset baselines so
+					// the next tick can produce a valid delta.
+					if np, perr := a.Pidof(ctx, cfg.Serial, cfg.AppID); perr == nil && np > 0 && np != pid {
+						if cfg.Debug != nil {
+							fmt.Fprintf(cfg.Debug, "sampler[%s] pid %d -> %d (app restarted)\n",
+								cfg.Serial, pid, np)
+						}
+						pid = np
+						prevProc, prevTotal = 0, 0
+					}
+				} else {
 					if tj > prevTotal && pj >= prevProc {
 						s.CPUPct = CPUPercent(pj-prevProc, tj-prevTotal, cfg.NCPU)
 					}
@@ -117,6 +192,8 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 
 				if mi, err := a.MemInfo(ctx, cfg.Serial, cfg.AppID); err == nil {
 					s.RAMMB = mi.TotalPSSMB
+				} else {
+					logErr("meminfo", err)
 				}
 
 				if fs, err := a.GfxFrameStats(ctx, cfg.Serial, cfg.AppID, cfg.BudgetNs); err == nil {
@@ -124,17 +201,24 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 					s.FrameMS = fs.AvgFrameMS
 					s.JankPct = fs.JankPercent
 					_ = a.GfxReset(ctx, cfg.Serial, cfg.AppID)
+				} else {
+					logErr("gfxinfo", err)
 				}
 
 				if b, err := a.Battery(ctx, cfg.Serial); err == nil {
 					s.BatteryPct = b.LevelPct
 					s.BatteryTempC = b.TemperatureC
+				} else {
+					logErr("battery", err)
 				}
 
 				if cfg.Threads {
-					if ts, tj, err := a.ReadThreadStats(ctx, cfg.Serial, cfg.Pid); err == nil {
-						if tj > prevThreadTotal {
-							totalDelta := tj - prevThreadTotal
+					ts, tjT, err := a.ReadThreadStats(ctx, cfg.Serial, pid)
+					if err != nil {
+						logErr("threads", err)
+					} else {
+						if tjT > prevThreadTotal {
+							totalDelta := tjT - prevThreadTotal
 							breakdown := map[string]float64{}
 							for _, t := range ts {
 								prev, ok := prevThreads[t.TID]
@@ -162,7 +246,7 @@ func (a *ADB) Sample(ctx context.Context, cfg SamplerConfig) (<-chan metrics.Sam
 							next[t.TID] = t.Jiffies
 						}
 						prevThreads = next
-						prevThreadTotal = tj
+						prevThreadTotal = tjT
 					}
 				}
 

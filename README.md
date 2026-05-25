@@ -9,10 +9,13 @@
 Lumos measures real-device performance — FPS, frame time, CPU, RAM, jank, startup — and:
 
 - **Parallel multi-device execution** with a **work-stealing scheduler** (one slow device never blocks the others).
+- **Two dispatch modes**: `distribute` (1 scenario → 1 device, scales throughput) or `replicate` (every scenario on every device, for cross-device comparison).
+- **Automatic duplicate-transport dedup** — phones reachable via USB + Wi-Fi + mDNS pairing show up once (best transport wins).
 - **Python automation** bridge for scripted scenarios (Appium, uiautomator2, XCUITest, plain `adb`, anything).
 - **Manual / interactive mode** (`lumos watch`) — drive the app by hand, capture metrics live with hotkeys.
+- **Per-thread CPU breakdown** (Android, on by default), **Perfetto traces** (`--trace`), **per-scenario HTML reports** (`--per-scenario`).
 - **Single static binary** for **macOS** (Android + iOS) and **Linux / Windows** (Android only).
-- **CI-friendly**: machine-readable JSON, HTML report, regression compare with exit codes 0/1/2 = pass/regression/error.
+- **CI-friendly**: machine-readable JSON, HTML report, perf budgets, regression compare with exit codes 0/1/2 = pass/regression/error.
 
 ## Install
 
@@ -121,13 +124,31 @@ scenarios:
     iterations: 3
     warmup: 1
     cooldown_sec: 1s
+  - name: settings_open_close
+    script: ./scenarios/settings_open_close.py
+    iterations: 3
 parallel:
+  mode: distribute     # default — round-robin: each scenario runs on exactly one device.
+                       # use 'replicate' to run every scenario on every device.
   max_devices: 0       # 0 = all attached
   work_stealing: true
 ```
 
+**Dispatch modes** (`parallel.mode`):
+
+| mode | behavior | use when |
+|---|---|---|
+| `distribute` (default) | scenarios are round-robin assigned across devices; each scenario runs on **one** device. Total wall time scales with device count. | you want throughput — "1 test script = 1 test suite on 1 device" |
+| `replicate` | every scenario runs on **every** device. | you want a cross-device comparison report |
+
 ```bash
 lumos run config.yaml -o results/
+
+# restrict to specific devices, or add a per-job timeout
+lumos run config.yaml -d GUJ7EIW85P8DSGHI -d emulator-5554 --job-timeout 5m -o results/
+
+# log per-collector sampler errors to stderr (great for diagnosing missing metrics)
+lumos run config.yaml --debug -o results/
 ```
 
 Each iteration produces one JSON file per device with raw samples + summary stats (mean / p50 / p90 / p99 / min / max / std) for FPS, frame_ms, cpu_pct, ram_mb, jank_pct.
@@ -137,6 +158,10 @@ Each iteration produces one JSON file per device with raw samples + summary stat
 ```bash
 lumos report results/
 open results/report.html
+
+# also write one HTML per scenario (report_<scenario>.html) — handy when
+# you used parallel.mode: distribute and want each scenario standalone.
+lumos report results/ --per-scenario
 ```
 
 Per-device rows with sparklines + aggregate-across-devices row per scenario.
@@ -153,6 +178,9 @@ echo $?     # 0 = pass, 1 = regression, 2 = error
 ```bash
 # CI-friendly JSON for downstream tooling
 lumos compare baseline.json current.json --threshold 5% --json
+
+# Don't fail the process on regression (still prints the diff):
+lumos compare baseline.json current.json --strict=false
 ```
 
 ### 5 — interactive / manual mode
@@ -338,11 +366,12 @@ non-fatal — the run continues without a trace and the reason is logged.
 
 ## Per-thread CPU breakdown (Android)
 
-Pass `--threads` to capture a per-thread CPU% breakdown on every sample, like
-Flashlight's Threads view:
+A per-thread CPU% breakdown is captured **by default** on Android, mirroring
+Flashlight's Threads view. To disable it (e.g. to shave one adb roundtrip
+per sample on very slow links):
 
 ```bash
-lumos run config.yaml --threads -o results/
+lumos run config.yaml --threads=false -o results/
 ```
 
 Each tick lumos walks `/proc/<pid>/task/*/stat` in a single adb shell call,
@@ -394,6 +423,25 @@ appear in `adb devices` and lumos treats them like any other device. iOS
 **simulators** are deliberately skipped by `lumos run` because xctrace's
 real-time sampling doesn't apply; use a physical device or wire up an Appium
 scenario.
+
+## Duplicate transports (USB + Wi-Fi + mDNS pairing)
+
+A single phone can appear in `adb devices` multiple times — for example once
+as a USB serial, once as `192.168.x.y:43665` over Wi-Fi, and once as
+`adb-<serial>-XXXX._adb-tls-connect._tcp.` from mDNS pairing. Running
+samplers against the same physical device twice causes them to fight
+(each force-stopping the app the other is watching) and produces zeroed
+metrics on one side.
+
+Lumos automatically deduplicates by probing `getprop ro.serialno` on each
+listed transport and keeping the best one, preferring:
+
+1. **USB serial** (most reliable, lowest latency)
+2. `IP:port` (Wi-Fi ADB)
+3. mDNS `_adb-tls-connect._tcp.` (kept for pairing; never used for sampling)
+
+So you can leave a phone paired over mDNS *and* connected via USB — it shows
+up once in `lumos devices` and gets sampled exactly once.
 
 ## CI example (GitHub Actions)
 

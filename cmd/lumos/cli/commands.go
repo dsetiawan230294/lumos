@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync/atomic"
 	"text/tabwriter"
@@ -95,6 +96,7 @@ func newRunCmd() *cobra.Command {
 		jobTimeout   time.Duration
 		trace        bool
 		threads      bool
+		debug        bool
 	)
 	cmd := &cobra.Command{
 		Use:   "run [config.yaml]",
@@ -169,8 +171,43 @@ func newRunCmd() *cobra.Command {
 				return errors.New("no devices found. Plug in an Android device with USB debugging enabled, or pass --no-device for a dry run")
 			}
 
-			fmt.Fprintf(out, "lumos run: %d scenario(s) × %d device(s) → %s\n",
-				len(cfg.Scenarios), len(plan), outDir)
+			// Determine dispatch mode.
+			mode := cfg.Parallel.Mode
+			if mode == "" {
+				mode = "distribute"
+			}
+
+			// Compute (scenario, device) assignments up front.
+			type assignment struct {
+				sc       config.Scenario
+				p        targetDevice
+				platform metrics.Platform
+				appID    string
+			}
+			var jobs []assignment
+			switch mode {
+			case "replicate":
+				// Original behavior: every scenario runs on every device.
+				for _, p := range plan {
+					for _, sc := range cfg.Scenarios {
+						jobs = append(jobs, assignment{sc, p, p.platform, p.appID})
+					}
+				}
+			default: // "distribute"
+				// Round-robin scenarios across devices: scenario[i] runs on
+				// device[i % len(plan)]. Each scenario runs on exactly one
+				// device so total wall time scales with the device count.
+				for i, sc := range cfg.Scenarios {
+					p := plan[i%len(plan)]
+					jobs = append(jobs, assignment{sc, p, p.platform, p.appID})
+				}
+			}
+
+			fmt.Fprintf(out, "lumos run: %d scenario(s) on %d device(s) (mode=%s, %d job(s)) → %s\n",
+				len(cfg.Scenarios), len(plan), mode, len(jobs), outDir)
+
+			// Build one sampler factory per device, reused across scenarios
+			// that land on the same device.
 
 			// Build a work-stealing pool: one worker per device. Each
 			// (device, scenario) pair becomes one Job. Pinning by DeviceID
@@ -197,69 +234,76 @@ func newRunCmd() *cobra.Command {
 			}
 
 			var runErrs atomic.Int32
-			for _, p := range plan {
-				p := p
-				appID := p.appID
-				platform := p.platform
-				var samplerFactory func() runner.Sampler
-				switch platform {
-				case metrics.IOS:
-					samplerFactory = makeIOSSamplerFactory(iosTools, p, appID)
-				default:
-					samplerFactory = makeSamplerFactory(ctx, adb, p, appID, 0, threads)
+			// Cache sampler factories per device id (built lazily on first
+			// use so we don't spawn factories for devices that get no jobs
+			// in distribute mode).
+			samplerByDev := map[string]func() runner.Sampler{}
+			for _, j := range jobs {
+				j := j
+				sc := j.sc
+				p := j.p
+				appID := j.appID
+				platform := j.platform
+
+				if _, ok := samplerByDev[p.id]; !ok {
+					switch platform {
+					case metrics.IOS:
+						samplerByDev[p.id] = makeIOSSamplerFactory(iosTools, p, appID)
+					default:
+						samplerByDev[p.id] = makeSamplerFactory(ctx, adb, p, appID, 0, threads, debug)
+					}
 				}
-				for _, sc := range cfg.Scenarios {
-					sc := sc
-					job := scheduler.Job{
-						ID:        fmt.Sprintf("%s/%s", p.id, sc.Name),
-						Scenario:  sc.Name,
-						DeviceID:  p.id,
-						Platforms: []string{string(platform)},
-						Run: func(jobCtx context.Context, workerID string) error {
-							in := runner.PlanInput{
-								Scenario:   sc,
-								DeviceID:   workerID,
-								Platform:   platform,
-								AppID:      appID,
-								OutDir:     outDir,
-								Tool:       "lumos",
-								Version:    cmd.Root().Version,
-								HarnessPy:  harness,
-								PyPath:     pyDir,
-								PythonBin:  pythonBin,
-								NewSampler: samplerFactory,
+				samplerFactory := samplerByDev[p.id]
+
+				job := scheduler.Job{
+					ID:        fmt.Sprintf("%s/%s", p.id, sc.Name),
+					Scenario:  sc.Name,
+					DeviceID:  p.id,
+					Platforms: []string{string(platform)},
+					Run: func(jobCtx context.Context, workerID string) error {
+						in := runner.PlanInput{
+							Scenario:   sc,
+							DeviceID:   workerID,
+							Platform:   platform,
+							AppID:      appID,
+							OutDir:     outDir,
+							Tool:       "lumos",
+							Version:    cmd.Root().Version,
+							HarnessPy:  harness,
+							PyPath:     pyDir,
+							PythonBin:  pythonBin,
+							NewSampler: samplerFactory,
+						}
+						if trace && platform == metrics.Android && p.id != "no-device" {
+							devID := p.id
+							in.NewTrace = func() runner.TraceCapture {
+								return android.NewPerfettoCapture(adb, devID, "")
 							}
-							if trace && platform == metrics.Android && p.id != "no-device" {
-								devID := p.id
-								in.NewTrace = func() runner.TraceCapture {
-									return android.NewPerfettoCapture(adb, devID, "")
-								}
+						}
+						results, err := runner.RunScenarioWithStderr(jobCtx, in, os.Stderr)
+						if err != nil {
+							fmt.Fprintf(out, "  [%s/%s] error: %v\n", workerID, sc.Name, err)
+							runErrs.Add(1)
+							return err
+						}
+						for _, r := range results {
+							kind := "iter"
+							if r.Warmup {
+								kind = "warmup"
 							}
-							results, err := runner.RunScenarioWithStderr(jobCtx, in, os.Stderr)
-							if err != nil {
-								fmt.Fprintf(out, "  [%s/%s] error: %v\n", workerID, sc.Name, err)
+							errStr := ""
+							if r.Err != nil {
+								errStr = " err=" + r.Err.Error()
 								runErrs.Add(1)
-								return err
 							}
-							for _, r := range results {
-								kind := "iter"
-								if r.Warmup {
-									kind = "warmup"
-								}
-								errStr := ""
-								if r.Err != nil {
-									errStr = " err=" + r.Err.Error()
-									runErrs.Add(1)
-								}
-								fmt.Fprintf(out, "  [%s/%s] %s %d → %s%s\n",
-									workerID, sc.Name, kind, r.Iteration, r.ReportPath, errStr)
-							}
-							return nil
-						},
-					}
-					if err := pool.Submit(job); err != nil {
-						return err
-					}
+							fmt.Fprintf(out, "  [%s/%s] %s %d → %s%s\n",
+								workerID, sc.Name, kind, r.Iteration, r.ReportPath, errStr)
+						}
+						return nil
+					},
+				}
+				if err := pool.Submit(job); err != nil {
+					return err
 				}
 			}
 			pool.CloseSubmit()
@@ -278,7 +322,8 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noDevice, "no-device", false, "run scenarios without a device (smoke/dry run; metrics will be empty)")
 	cmd.Flags().DurationVar(&jobTimeout, "job-timeout", 0, "per-(device,scenario) timeout; 0 disables")
 	cmd.Flags().BoolVar(&trace, "trace", false, "capture a Perfetto trace per measured iteration (Android only; requires perfetto on device, Android 9+)")
-	cmd.Flags().BoolVar(&threads, "threads", false, "capture per-thread CPU% breakdown (Android only; adds one adb roundtrip per sample)")
+	cmd.Flags().BoolVar(&threads, "threads", true, "capture per-thread CPU% breakdown (Android only; adds one adb roundtrip per sample). Use --threads=false to disable.")
+	cmd.Flags().BoolVar(&debug, "debug", false, "log per-collector sampler errors to stderr (helps diagnose missing metrics)")
 	return cmd
 }
 
@@ -313,7 +358,7 @@ func buildPlan(cfg *config.Config, androidDevs []android.DeviceInfo, iosDevs []i
 	return plan
 }
 
-func makeSamplerFactory(ctx context.Context, adb *android.ADB, t targetDevice, appID string, _ time.Duration, threads bool) func() runner.Sampler {
+func makeSamplerFactory(ctx context.Context, adb *android.ADB, t targetDevice, appID string, _ time.Duration, threads, debug bool) func() runner.Sampler {
 	return func() runner.Sampler {
 		return runner.SamplerFunc(func(ctx context.Context) (<-chan metrics.Sample, error) {
 			if t.id == "no-device" {
@@ -347,6 +392,10 @@ func makeSamplerFactory(ctx context.Context, adb *android.ADB, t targetDevice, a
 				if ncpu == 0 {
 					ncpu = adb.NCPU(ctx, t.id)
 				}
+				var dbg io.Writer
+				if debug {
+					dbg = os.Stderr
+				}
 				inner, err := adb.Sample(ctx, android.SamplerConfig{
 					Serial:   t.id,
 					AppID:    appID,
@@ -354,6 +403,7 @@ func makeSamplerFactory(ctx context.Context, adb *android.ADB, t targetDevice, a
 					Interval: time.Second,
 					NCPU:     ncpu,
 					Threads:  threads,
+					Debug:    dbg,
 				})
 				if err != nil {
 					return
@@ -545,7 +595,10 @@ func newWatchCmd() *cobra.Command {
 }
 
 func newReportCmd() *cobra.Command {
-	var outPath string
+	var (
+		outPath     string
+		perScenario bool
+	)
 	cmd := &cobra.Command{
 		Use:   "report [results-dir]",
 		Short: "Render an HTML report from a results directory",
@@ -556,10 +609,20 @@ func newReportCmd() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", path)
+			if perScenario {
+				paths, err := report.WritePerScenarioReports(args[0], "lumos", versionFromCtx(cmd))
+				if err != nil {
+					return err
+				}
+				for _, p := range paths {
+					fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", p)
+				}
+			}
 			return nil
 		},
 	}
-	cmd.Flags().StringVarP(&outPath, "out", "o", "", "output HTML path (default: <results-dir>/report.html)")
+	cmd.Flags().StringVarP(&outPath, "out", "o", "", "output HTML path for the combined report (default: <results-dir>/report.html)")
+	cmd.Flags().BoolVar(&perScenario, "per-scenario", false, "also write one HTML per scenario (report_<scenario>.html)")
 	return cmd
 }
 
