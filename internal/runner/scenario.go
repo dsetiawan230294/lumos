@@ -113,11 +113,9 @@ func RunScenarioWithStderr(ctx context.Context, in PlanInput, stderr io.Writer) 
 			Warmup:     warmup,
 			Err:        err,
 		})
-		if err != nil {
-			// Don't abort the whole scenario on a single failure — record
-			// and continue, mirroring CI-friendly behaviour. Caller decides
-			// whether to bail on err count.
-		}
+		// Don't abort the whole scenario on a single failure — record and
+		// continue, mirroring CI-friendly behaviour. Caller decides whether
+		// to bail based on err count in results.
 
 		if i < total-1 && cooldown > 0 {
 			select {
