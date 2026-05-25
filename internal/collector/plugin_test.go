@@ -3,6 +3,7 @@ package collector
 import (
 	"bytes"
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,15 @@ import (
 	"github.com/dsetiawan230294/lumos/internal/metrics"
 )
 
+func skipIfNoSh(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("requires POSIX /bin/sh; not available on Windows")
+	}
+}
+
 func TestPlugin_StdoutSamples(t *testing.T) {
+	skipIfNoSh(t)
 	p := Plugin{
 		Name:    "echo3",
 		Command: "/bin/sh",
@@ -64,6 +73,7 @@ func TestPlugin_StartError(t *testing.T) {
 }
 
 func TestPlugin_ContextCancelStopsPlugin(t *testing.T) {
+	skipIfNoSh(t)
 	p := Plugin{
 		Name:    "looper",
 		Command: "/bin/sh",
@@ -110,6 +120,7 @@ func TestParsePluginLine_DropsGarbage(t *testing.T) {
 }
 
 func TestPlugin_StderrForwarded(t *testing.T) {
+	skipIfNoSh(t)
 	p := Plugin{
 		Name:    "noisy",
 		Command: "/bin/sh",
@@ -130,6 +141,7 @@ func TestPlugin_StderrForwarded(t *testing.T) {
 }
 
 func TestPlugin_DeviceIDEnv(t *testing.T) {
+	skipIfNoSh(t)
 	p := Plugin{
 		Name:    "envcheck",
 		Command: "/bin/sh",

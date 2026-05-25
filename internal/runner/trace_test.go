@@ -69,7 +69,8 @@ func TestRun_TraceCapture_Success(t *testing.T) {
 	if !tr.startCalled || !tr.stopCalled {
 		t.Fatalf("trace lifecycle incomplete: start=%v stop=%v", tr.startCalled, tr.stopCalled)
 	}
-	if !tr.startedAt.Before(tr.stoppedAt) {
+	// Allow equal timestamps to tolerate low clock resolution (e.g., Windows ~15ms).
+	if tr.stoppedAt.Before(tr.startedAt) {
 		t.Fatalf("trace must start before it stops: %v vs %v", tr.startedAt, tr.stoppedAt)
 	}
 	if len(res.Run.Artifacts) != 1 {
