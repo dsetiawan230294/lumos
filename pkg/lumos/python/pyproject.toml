@@ -3,22 +3,32 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lumos-py"
-version = "0.0.1"
+name = "lumos-performance-test"
+version = "0.1.0"
 description = "Python helper for authoring Lumos mobile benchmark scenarios"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Lumos contributors" }]
-keywords = ["mobile", "benchmark", "performance", "android", "ios"]
+keywords = ["mobile", "benchmark", "performance", "android", "ios", "appium"]
 classifiers = [
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
+  "Topic :: Software Development :: Testing",
 ]
 
+[project.optional-dependencies]
+appium = ["Appium-Python-Client>=3.0"]
+
 [project.urls]
-Homepage = "https://github.com/lumos-bench/lumos"
+Homepage = "https://github.com/dsetiawan230294/lumos"
+Repository = "https://github.com/dsetiawan230294/lumos"
+Issues = "https://github.com/dsetiawan230294/lumos/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
