@@ -244,16 +244,20 @@ func BuildAggregate(reports []RunReport) AggregateReport {
 func seriesFromRefs(xs []metricsSampleRef) map[string][]float64 {
 	n := len(xs)
 	out := map[string][]float64{
-		"fps":      make([]float64, n),
-		"cpu_pct":  make([]float64, n),
-		"ram_mb":   make([]float64, n),
-		"jank_pct": make([]float64, n),
+		"fps":            make([]float64, n),
+		"cpu_pct":        make([]float64, n),
+		"ram_mb":         make([]float64, n),
+		"jank_pct":       make([]float64, n),
+		"battery_pct":    make([]float64, n),
+		"battery_temp_c": make([]float64, n),
 	}
 	for i, s := range xs {
 		out["fps"][i] = s.FPS
 		out["cpu_pct"][i] = s.CPUPct
 		out["ram_mb"][i] = s.RAMMB
 		out["jank_pct"][i] = s.JankPct
+		out["battery_pct"][i] = s.BatteryPct
+		out["battery_temp_c"][i] = s.BatteryTempC
 	}
 	return out
 }

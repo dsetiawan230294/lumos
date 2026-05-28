@@ -12,17 +12,63 @@ import (
 
 // Config is the top-level benchmark configuration parsed from YAML.
 type Config struct {
-	App        App        `yaml:"app"`
-	Scenarios  []Scenario `yaml:"scenarios"`
-	Devices    Devices    `yaml:"devices"`
-	Parallel   Parallel   `yaml:"parallel"`
-	Thresholds Thresholds `yaml:"thresholds"`
+	App        App               `yaml:"app"`
+	Scenarios  []Scenario        `yaml:"scenarios"`
+	Devices    Devices           `yaml:"devices"`
+	Parallel   Parallel          `yaml:"parallel"`
+	Thresholds Thresholds        `yaml:"thresholds"`
+	// Env is a map of extra environment variables exported to every
+	// scenario and hook subprocess. Useful for `PYTHONPATH`, feature
+	// flags, or anything else your scripts read via os.environ.
+	// PYTHONPATH is special-cased: Lumos's vendored helper dir is
+	// prepended so the `lumos` Python module always resolves.
+	Env        map[string]string `yaml:"env"`
 }
 
 // App identifies the application under test on each platform.
 type App struct {
-	Android string `yaml:"android"`
-	IOS     string `yaml:"ios"`
+	Android string  `yaml:"android"`
+	IOS     string  `yaml:"ios"`
+	Appium  *Appium `yaml:"appium"` // optional: enables auto driver injection
+}
+
+// Appium configures auto driver creation for scenarios and hooks. When set,
+// the Python harness opens an Appium WebDriver session before calling the
+// scenario's `run()` function and passes it in as the `driver` argument:
+//
+//	def run(device, driver, iteration):
+//	    interact.driver = driver
+//	    ...
+//
+// All fields are optional; reasonable defaults apply.
+type Appium struct {
+	// ServerURL is the Appium server endpoint. Defaults to the
+	// LUMOS_APPIUM_URL env var, or http://localhost:4723 if neither set.
+	ServerURL string `yaml:"server_url"`
+
+	// Activity is appActivity (Android). Needed when AutoLaunch=false and
+	// the app has multiple launcher activities.
+	Activity string `yaml:"activity"`
+
+	// AutoLaunch toggles Appium's session-start `am start`. Default true.
+	// Set false for apps with ambiguous launcher intents (driven via
+	// deeplinks / start_activity instead).
+	AutoLaunch *bool `yaml:"auto_launch"`
+
+	// NoReset preserves app data between sessions. Default false. Set
+	// true when a hook prepares state (env switch, login) that later
+	// scenarios should reuse.
+	NoReset *bool `yaml:"no_reset"`
+
+	// TerminateOnQuit controls whether the harness force-stops the app
+	// when the scenario subprocess exits. Default true (clean state
+	// between scenarios). Set false on a hook scenario so the next
+	// scenario can resume in-memory state (e.g. an unlocked PIN screen)
+	// rather than cold-launching.
+	TerminateOnQuit *bool `yaml:"terminate_on_quit"`
+
+	// Caps merges arbitrary extra W3C capabilities on top of the above.
+	Caps map[string]any `yaml:"caps"`
 }
 
 // Scenario describes one benchmark scenario driven by a Python script.
@@ -46,6 +92,25 @@ type Scenario struct {
 	CooldownSec time.Duration `yaml:"cooldown_sec"`
 	Hook        bool          `yaml:"hook"`
 	Timebox     time.Duration `yaml:"timebox"`
+
+	// InProcessIterations switches the iteration model from
+	// "one subprocess per iteration" (default) to "one subprocess for
+	// the whole scenario". When true the harness opens the driver
+	// once, calls setup() once, loops run(device, driver, i) N times
+	// emitting per-iteration markers, then calls teardown() once.
+	// Each iteration still produces its own JSON report (samples are
+	// sliced by the per-iteration markers). Use this when re-opening
+	// the driver between iterations is too expensive (e.g. cold
+	// install + login per iteration).
+	InProcessIterations bool `yaml:"in_process_iterations"`
+
+	// Appium overrides the top-level `app.appium` block for this
+	// scenario only. Useful when a hook needs `no_reset: false` (clean
+	// install for a deterministic login) while the benchmark scenarios
+	// keep `no_reset: true` (cold-start from the hook's prepared state).
+	// Only set fields override; nil/missing fields fall through to the
+	// top-level config.
+	Appium *Appium `yaml:"appium"`
 }
 
 // Devices filters which attached devices participate.

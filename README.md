@@ -6,7 +6,7 @@
 [![CI](https://github.com/dsetiawan230294/lumos/actions/workflows/ci.yml/badge.svg)](https://github.com/dsetiawan230294/lumos/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Lumos measures real-device performance — FPS, frame time, CPU, RAM, jank, startup — and:
+Lumos measures real-device performance — FPS, frame time, CPU, RAM, jank, battery (level + temperature), startup — and:
 
 - **Parallel multi-device execution** with a **work-stealing scheduler** (one slow device never blocks the others).
 - **Two dispatch modes**: `distribute` (1 scenario → 1 device, scales throughput) or `replicate` (every scenario on every device, for cross-device comparison).
@@ -185,7 +185,7 @@ lumos run config.yaml -d GUJ7EIW85P8DSGHI -d emulator-5554 --job-timeout 5m -o r
 lumos run config.yaml --debug -o results/
 ```
 
-Each iteration produces one JSON file per device with raw samples + summary stats (mean / p50 / p90 / p99 / min / max / std) for FPS, frame_ms, cpu_pct, ram_mb, jank_pct.
+Each iteration produces one JSON file per device with raw samples + summary stats (mean / p50 / p90 / p99 / min / max / std) for FPS, frame_ms, cpu_pct, ram_mb, jank_pct, battery_pct, battery_temp_c.
 
 ### 3 — render an HTML report
 
@@ -279,20 +279,51 @@ See [scenarios/examples/](scenarios/examples/) for runnable scripts (incl. an Ap
 
 ### Appium (first-class adapter)
 
-For Appium scenarios use `lumos.appium`, which folds the boilerplate into
-two helpers:
+For Appium scenarios, Lumos can **auto-create the WebDriver** from your YAML
+config so test files stay pure test logic — no driver wiring boilerplate:
+
+```yaml
+# config.yaml
+app:
+  android: com.example.app
+  appium:
+    server_url: http://localhost:4723/wd/hub   # optional; falls back to LUMOS_APPIUM_URL
+    activity: com.example.MainActivity         # appActivity (Android)
+    auto_launch: false                         # skip Appium's session-start am start
+    no_reset: true                             # preserve app state across sessions
+    caps:                                      # arbitrary extra W3C caps
+      newCommandTimeout: 300
+```
+
+When `app.appium` is present, the harness opens the Appium session before
+calling each `run()` and passes the driver in as an extra argument:
+
+```python
+from lumos import Device
+
+def run(device: Device, driver, iteration: int) -> None:
+    # driver is a connected appium.webdriver.Remote — pure test logic from here.
+    driver.find_element("id", "user").send_keys("demo")
+    driver.find_element("id", "pw").send_keys("secret")
+    driver.find_element("id", "go").click()
+```
+
+Setup hooks (`hook: true`) receive the same auto-injected driver, so a
+typical pattern is: hook handles login once per device → scenarios always
+start from "logged in".
+
+If you'd rather keep `app.appium` unset and create the driver manually
+inside the scenario, the `lumos.appium` helpers still work:
 
 ```python
 from lumos import Device
 from lumos.appium import session, traced
 
 def run(device: Device, iteration: int) -> None:
-    with session(device) as driver:                # builds Options, quits on exit
-        with traced("login"):                      # markers fire even on exception
+    with session(device, caps={"appActivity": "..."}) as driver:
+        with traced("login"):
             driver.find_element("id", "user").send_keys("demo")
-            driver.find_element("id", "pw").send_keys("secret")
             driver.find_element("id", "go").click()
-
         with traced("scroll_feed"):
             for _ in range(6):
                 driver.swipe(500, 1500, 500, 500, 200)

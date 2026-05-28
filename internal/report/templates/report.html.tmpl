@@ -398,7 +398,15 @@
       <div class="kpi">
         <div class="kpi-label">Battery · last</div>
         <div class="kpi-value">{{fmt0 $s.Min}}<span class="kpi-unit">%</span></div>
-        <div class="kpi-sub">temp {{fmt1 (index .Aggregate "battery_temp_c").Mean}} °C</div>
+        <div class="kpi-sub">started {{fmt0 $s.Max}}%</div>
+      </div>
+    {{end}}
+    {{if hasMetric .Aggregate "battery_temp_c"}}
+      {{$s := index .Aggregate "battery_temp_c"}}
+      <div class="kpi {{verdictClass "battery_temp_c" $s.Mean}}">
+        <div class="kpi-label">Batt temp · mean</div>
+        <div class="kpi-value">{{fmt1 $s.Mean}}<span class="kpi-unit">°C</span></div>
+        <div class="kpi-sub">peak {{fmt1 $s.Max}} °C</div>
       </div>
     {{end}}
   </div>
@@ -457,6 +465,18 @@
               <div class="chart-head"><span class="name">jank %</span><span class="val">{{fmt2 (index .Summary "jank_pct").Mean}}</span></div>
               {{svgLine (index .Series "jank_pct") (metricColor "jank_pct")}}
             </div>
+            {{if hasMetric .Summary "battery_pct"}}
+            <div class="chart">
+              <div class="chart-head"><span class="name">battery %</span><span class="val">{{fmt0 (index .Summary "battery_pct").Min}}</span></div>
+              {{svgLine (index .Series "battery_pct") (metricColor "battery_pct")}}
+            </div>
+            {{end}}
+            {{if hasMetric .Summary "battery_temp_c"}}
+            <div class="chart">
+              <div class="chart-head"><span class="name">batt °C</span><span class="val">{{fmt1 (index .Summary "battery_temp_c").Mean}}</span></div>
+              {{svgLine (index .Series "battery_temp_c") (metricColor "battery_temp_c")}}
+            </div>
+            {{end}}
           </div>
         </td>
       </tr>

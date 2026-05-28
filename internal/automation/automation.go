@@ -136,6 +136,14 @@ func handle(r *Result, method string, p map[string]any) {
 		r.Markers = append(r.Markers, metrics.Marker{T: now, Label: label, Kind: "end"})
 	case "lumos.mark":
 		r.Markers = append(r.Markers, metrics.Marker{T: now, Label: label, Kind: "point"})
+	case "lumos.iterStart":
+		// In-process iteration boundary. Label encodes the iteration
+		// number (post-warmup, 1-based) and a "warmup:1" suffix when
+		// the iteration is a warmup pass. The runner uses these to
+		// slice samples into per-iteration reports.
+		r.Markers = append(r.Markers, metrics.Marker{T: now, Label: label, Kind: "iter_start"})
+	case "lumos.iterEnd":
+		r.Markers = append(r.Markers, metrics.Marker{T: now, Label: label, Kind: "iter_end"})
 	case "lumos.log":
 		lvl, _ := p["level"].(string)
 		msg, _ := p["msg"].(string)

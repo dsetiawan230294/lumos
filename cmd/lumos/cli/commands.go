@@ -190,6 +190,19 @@ func newRunCmd() *cobra.Command {
 				}
 			}
 
+			// Build the base env once; per-scenario Appium overrides are
+			// layered on top later. cfg.Env is the user-supplied
+			// top-level `env:` block (e.g. PYTHONPATH); Appium-derived
+			// keys always win so users can't accidentally clobber the
+			// driver wiring.
+			baseEnv := mergeMaps(cfg.Env, buildAppiumEnv(cfg.App.Appium))
+			scenarioEnv := func(sc config.Scenario) map[string]string {
+				if sc.Appium == nil {
+					return baseEnv
+				}
+				return mergeMaps(cfg.Env, buildAppiumEnv(mergeAppium(cfg.App.Appium, sc.Appium)))
+			}
+
 			// Run hooks before any benchmark scenarios. Each device runs its
 			// hook(s) in parallel with the other devices (one Appium / adb
 			// pipe per device) so the slowest device sets the floor, not the
@@ -223,7 +236,7 @@ func newRunCmd() *cobra.Command {
 								Platform:   string(host.platform),
 								AppID:      host.appID,
 								Iteration:  1,
-								Env:        mergeHookEnv(pyDir),
+								Env:        mergeMaps(mergeHookEnv(pyDir), scenarioEnv(h)),
 								Stderr:     os.Stderr,
 							})
 							if res.Err != nil {
@@ -336,6 +349,7 @@ func newRunCmd() *cobra.Command {
 							PyPath:     pyDir,
 							PythonBin:  pythonBin,
 							NewSampler: samplerFactory,
+							ExtraEnv:   scenarioEnv(sc),
 						}
 						if trace && platform == metrics.Android && p.id != "no-device" {
 							devID := p.id
@@ -427,6 +441,102 @@ func mergeHookEnv(pyPath string) map[string]string {
 	env := map[string]string{}
 	if pyPath != "" {
 		env["PYTHONPATH"] = pyPath
+	}
+	return env
+}
+
+// mergeMaps merges b into a copy of a; later keys win.
+func mergeMaps(a, b map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range a {
+		out[k] = v
+	}
+	for k, v := range b {
+		out[k] = v
+	}
+	return out
+}
+
+// mergeAppium returns a new Appium config with override layered on top of
+// base. Fields explicitly set in override win; nil/zero fields fall through
+// to base. Used so a hook scenario can flip e.g. no_reset without
+// duplicating the entire app.appium block.
+func mergeAppium(base, override *config.Appium) *config.Appium {
+	if override == nil {
+		return base
+	}
+	out := config.Appium{}
+	if base != nil {
+		out = *base
+		// Deep-copy caps so we don't mutate the parsed config.
+		if base.Caps != nil {
+			out.Caps = make(map[string]any, len(base.Caps))
+			for k, v := range base.Caps {
+				out.Caps[k] = v
+			}
+		}
+	}
+	if override.ServerURL != "" {
+		out.ServerURL = override.ServerURL
+	}
+	if override.Activity != "" {
+		out.Activity = override.Activity
+	}
+	if override.AutoLaunch != nil {
+		out.AutoLaunch = override.AutoLaunch
+	}
+	if override.NoReset != nil {
+		out.NoReset = override.NoReset
+	}
+	if override.TerminateOnQuit != nil {
+		out.TerminateOnQuit = override.TerminateOnQuit
+	}
+	if len(override.Caps) > 0 {
+		if out.Caps == nil {
+			out.Caps = map[string]any{}
+		}
+		for k, v := range override.Caps {
+			out.Caps[k] = v
+		}
+	}
+	return &out
+}
+
+// buildAppiumEnv serialises an Appium config block into env vars consumed by
+// the Python harness. Returns an empty map when ap is nil so test files can
+// still call `with session(device) as driver:` manually if they prefer.
+func buildAppiumEnv(ap *config.Appium) map[string]string {
+	env := map[string]string{}
+	if ap == nil {
+		return env
+	}
+	env["LUMOS_APPIUM_AUTO"] = "1"
+	if ap.ServerURL != "" {
+		env["LUMOS_APPIUM_URL"] = ap.ServerURL
+	}
+	caps := map[string]any{}
+	for k, v := range ap.Caps {
+		caps[k] = v
+	}
+	if ap.Activity != "" {
+		caps["appActivity"] = ap.Activity
+	}
+	if ap.AutoLaunch != nil {
+		caps["autoLaunch"] = *ap.AutoLaunch
+	}
+	if ap.NoReset != nil {
+		caps["noReset"] = *ap.NoReset
+	}
+	if ap.TerminateOnQuit != nil && !*ap.TerminateOnQuit {
+		// Default in harness is "1" (terminate). Only export when the
+		// user wants to disable termination so existing runs are
+		// unaffected.
+		env["LUMOS_APPIUM_TERMINATE_ON_QUIT"] = "0"
+	}
+	if len(caps) > 0 {
+		if b, err := json.Marshal(caps); err == nil {
+			env["LUMOS_APPIUM_CAPS"] = string(b)
+		}
 	}
 	return env
 }
